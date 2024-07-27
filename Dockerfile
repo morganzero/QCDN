@@ -4,8 +4,8 @@ FROM python:3.9-slim as builder
 LABEL maintainer="morganzero@sushibox.dev"
 LABEL description="QCDN is a Docker-based CDN server using Nginx and Cloudflare"
 
-# Install curl for DNS update
-RUN apt-get update && apt-get install -y curl && rm -rf /var/lib/apt/lists/*
+# Install curl and jq for DNS update
+RUN apt-get update && apt-get install -y curl jq && rm -rf /var/lib/apt/lists/*
 
 # Install required Python packages
 RUN pip install requests
@@ -26,8 +26,8 @@ COPY nginx.conf /etc/nginx/templates/nginx.conf.template
 # Copy the entrypoint script from the builder stage
 COPY --from=builder /entrypoint.sh /entrypoint.sh
 
-# Install bash for the entrypoint script
-RUN apk add --no-cache bash
+# Install bash and jq for the entrypoint script
+RUN apk add --no-cache bash jq
 
 # Set environment variables
 ENV CLOUDFLARE_API_URL="https://api.cloudflare.com/client/v4"
