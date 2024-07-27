@@ -1,57 +1,58 @@
 #!/bin/bash
 
-# Function to get the public IP address of the machine
-get_public_ip() {
-    curl -s https://api.ipify.org
-}
-
-# Function to update Cloudflare DNS with retry logic
+# Function to update or create Cloudflare DNS record
 update_cloudflare_dns() {
     local retries=5
-    local wait=30
+    local initial_wait=60
 
     for ((i=0; i<retries; i++)); do
+        # Initial wait to handle rate limits
+        sleep $((initial_wait * i))
+
         # Check if the DNS record already exists
         response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=cdn.${DOMAIN}&type=A" \
         -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
         -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
         -H "Content-Type: application/json")
 
+        echo "Response from Cloudflare API: $response"
+
         record_id=$(echo $response | jq -r '.result[0].id')
         current_ip=$(echo $response | jq -r '.result[0].content')
 
-        # Get the public IP address
-        public_ip=$(get_public_ip)
+        echo "Detected record ID: $record_id"
+        echo "Current IP in DNS record: $current_ip"
+        echo "Origin server IP: $ORIGIN_SERVER"
 
-        if [ "$record_id" != "null" ]; then
-            if [ "$current_ip" == "$public_ip" ]; then
+        if [ "$record_id" != "null" ] && [ "$record_id" != "" ]; then
+            if [ "$current_ip" == "$ORIGIN_SERVER" ]; then
                 echo "DNS record already up-to-date"
                 return 0
             else
                 echo "Updating existing DNS record"
-                response=$(curl -s -o response.json -w "%{http_code}" -X PUT "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records/${record_id}" \
+                response=$(curl -s -w "%{http_code}" -o response.json -X PUT "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records/${record_id}" \
                 -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
                 -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
                 -H "Content-Type: application/json" \
-                --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${public_ip}"'","ttl":120,"proxied":true}')
+                --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
             fi
         else
             echo "Creating new DNS record"
-            response=$(curl -s -o response.json -w "%{http_code}" -X POST "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records" \
+            response=$(curl -s -w "%{http_code}" -o response.json -X POST "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records" \
             -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
             -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
             -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${public_ip}"'","ttl":120,"proxied":true}')
+            --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
         fi
 
-        http_code=$(cat response.json | jq -r '.http_code')
+        http_code=$(tail -n 1 <<< "$response")
 
         if [ "$http_code" -eq 200 ]; then
             echo "DNS record updated successfully"
             return 0
         elif [ "$http_code" -eq 429 ]; then
-            echo "Rate limited. Waiting for $wait seconds before retrying..."
-            sleep $wait
+            echo "Rate limited. Waiting for $((initial_wait * (2**i))) seconds before retrying..."
+            sleep $((initial_wait * (2**i)))
         else
             echo "Failed to update DNS record. HTTP status code: $http_code"
             cat response.json
@@ -84,19 +85,23 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
+# Debugging: print the CERTS_PATH content
+echo "Listing content of CERTS_PATH ($CERTS_PATH):"
+ls -l "$CERTS_PATH"
+
 # Wait for the certificates to be available
 for i in {1..10}; do
     if [ -f "${CERTS_PATH}/fullchain.pem" ] && [ -f "${CERTS_PATH}/privkey.pem" ]; then
         echo "Certificates found"
         break
     else
-        echo "Waiting for certificates..."
+        echo "Waiting for certificates... Attempt $i"
         sleep 5
     fi
 done
 
 if [ ! -f "${CERTS_PATH}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/privkey.pem" ]; then
-    echo "Certificates not found at ${CERTS_PATH}"
+    echo "Certificates not found at ${CERTS_PATH} after waiting"
     exit 1
 fi
 
