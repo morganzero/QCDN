@@ -39,3 +39,4 @@ ENV CERTS_PATH=""
 
 # Entry point
 ENTRYPOINT ["/entrypoint.sh"]
+CMD ["nginx", "-g", "daemon off;"]
