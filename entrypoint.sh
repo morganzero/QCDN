@@ -2,6 +2,9 @@
 
 # Function to update or create Cloudflare DNS record
 update_cloudflare_dns() {
+    local domain=$1
+    local target=$2
+
     local retries=5
     local initial_wait=60
 
@@ -10,7 +13,7 @@ update_cloudflare_dns() {
         sleep $((initial_wait * i))
 
         # Check if the DNS record already exists
-        response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=cdn.${DOMAIN}&type=A" \
+        response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=${domain}&type=A" \
         -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
         -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
         -H "Content-Type: application/json")
@@ -22,58 +25,71 @@ update_cloudflare_dns() {
 
         echo "Detected record ID: $record_id"
         echo "Current IP in DNS record: $current_ip"
-        echo "Origin server IP: $ORIGIN_SERVER"
+        echo "Origin server IP: $target"
 
         if [ "$record_id" != "null" ] && [ "$record_id" != "" ]; then
-            if [ "$current_ip" == "$ORIGIN_SERVER" ]; then
-                echo "DNS record already up-to-date"
+            if [ "$current_ip" == "$target" ]; then
+                echo "DNS record already up-to-date for $domain"
                 return 0
             else
-                echo "Updating existing DNS record"
+                echo "Updating existing DNS record for $domain"
                 response=$(curl -s -w "%{http_code}" -o response.json -X PUT "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records/${record_id}" \
                 -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
                 -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
                 -H "Content-Type: application/json" \
-                --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
+                --data '{"type":"A","name":"'${domain}'","content":"'"${target}"'","ttl":120,"proxied":false}')
             fi
         else
-            echo "Creating new DNS record"
+            echo "Creating new DNS record for $domain"
             response=$(curl -s -w "%{http_code}" -o response.json -X POST "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records" \
             -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
             -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
             -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
+            --data '{"type":"A","name":"'${domain}'","content":"'"${target}"'","ttl":120,"proxied":false}')
         fi
 
         http_code=$(tail -n 1 <<< "$response")
 
         if [ "$http_code" -eq 200 ]; then
-            echo "DNS record updated successfully"
+            echo "DNS record for $domain updated successfully"
             return 0
         elif [ "$http_code" -eq 429 ]; then
             echo "Rate limited. Waiting for $((initial_wait * (2**i))) seconds before retrying..."
             sleep $((initial_wait * (2**i)))
         else
-            echo "Failed to update DNS record. HTTP status code: $http_code"
+            echo "Failed to update DNS record for $domain. HTTP status code: $http_code"
             cat response.json
             return 1
         fi
     done
 
-    echo "Failed to update DNS record after $retries attempts"
+    echo "Failed to update DNS record for $domain after $retries attempts"
     return 1
 }
 
-# Ensure DOMAIN is set
-if [ -z "$DOMAIN" ]; then
-    echo "DOMAIN environment variable not set"
+# Ensure ORIGIN_SERVER is set
+if [ -z "$ORIGIN_SERVER" ]; then
+    echo "ORIGIN_SERVER environment variable not set"
     exit 1
 fi
 
-# Update Cloudflare DNS if ORIGIN_SERVER is set
-if [ ! -z "$ORIGIN_SERVER" ]; then
-    update_cloudflare_dns || exit 1
-fi
+# Update Cloudflare DNS for the main QCDN server
+update_cloudflare_dns "cdn.${DOMAIN}" "$ORIGIN_SERVER" || exit 1
+
+# Iterate over each APPn_DOMAIN and APPn_TARGET
+for i in {1..20}; do
+    domain_var="APP${i}_DOMAIN"
+    target_var="APP${i}_TARGET"
+    target_port_var="APP${i}_TARGET_PORT"
+
+    domain="${!domain_var}"
+    target="${!target_var}"
+    target_port="${!target_port_var:-80}"
+
+    if [ -n "$domain" ] && [ -n "$target" ]; then
+        update_cloudflare_dns "$domain" "$target" || exit 1
+    fi
+done
 
 # Ensure the certificates path is provided
 if [ -z "$CERTS_PATH" ]; then
@@ -87,7 +103,7 @@ ls -l "$CERTS_PATH"
 
 # Wait for the certificates to be available
 for i in {1..10}; do
-    if [ -f "${CERTS_PATH}/fullchain.pem" ] && [ -f "${CERTS_PATH}/privkey.pem" ]; then
+    if [ -f "${CERTS_PATH}/fullchain.pem" ] && [ -f "${CERTS_PATH}/privkey.pem}" ]; then
         echo "Certificates found"
         break
     else
