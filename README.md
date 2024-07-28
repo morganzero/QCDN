@@ -25,9 +25,10 @@ docker run -d \
     -e CLOUDFLARE_API_KEY="your_cloudflare_api_key" \
     -e ZONE_ID="your_zone_id" \
     -e DOMAIN="your_domain.com" \
+    -e ORIGIN_SERVER="your_qcdn_server_ip_or_domain" \
     -e CERTS_PATH="/path/to/your/certs" \
     -e APP1_DOMAIN="plex-cdn.your_domain.com" \
-    -e APP1_TARGET="plex-server.your_domain.com" \
+    -e APP1_TARGET="your_plex_server_ip_or_domain" \
     -e APP1_TARGET_PORT="443" \
     -e APP2_DOMAIN="app2-cdn.your_domain.com" \
     -e APP2_TARGET="internal-web-app-ip-or-domain" \
@@ -38,6 +39,7 @@ docker run -d \
     -v /path/to/your/certs:/path/to/your/certs:ro \
     -p 80:80 -p 443:443 \
     sushibox/qcdn:latest
+
 ```
 ### 3. Configure DNS Records in Cloudflare
 
@@ -81,14 +83,16 @@ Here’s how you can configure multiple applications with unique subdomains:
 
 ```sh
 docker run -d \
+docker run -d \
     --name qcdn \
     -e CLOUDFLARE_EMAIL="your_cloudflare_email@example.com" \
     -e CLOUDFLARE_API_KEY="your_cloudflare_api_key" \
     -e ZONE_ID="your_zone_id" \
     -e DOMAIN="your_domain.com" \
+    -e ORIGIN_SERVER="your_qcdn_server_ip_or_domain" \
     -e CERTS_PATH="/path/to/your/certs" \
     -e APP1_DOMAIN="plex-cdn.your_domain.com" \
-    -e APP1_TARGET="plex-server.your_domain.com" \
+    -e APP1_TARGET="your_plex_server_ip_or_domain" \
     -e APP1_TARGET_PORT="443" \
     -e APP2_DOMAIN="app2-cdn.your_domain.com" \
     -e APP2_TARGET="internal-web-app-ip-or-domain" \
