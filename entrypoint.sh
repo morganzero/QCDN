@@ -3,7 +3,7 @@
 # Function to update or create Cloudflare DNS record
 update_cloudflare_dns() {
     local retries=5
-    local initial_wait=30
+    local initial_wait=60
 
     for ((i=0; i<retries; i++)); do
         # Initial wait to handle rate limits
@@ -106,10 +106,34 @@ if [ ! -f "${CERTS_PATH}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/privkey.pem" 
 fi
 
 # Generate Nginx configuration from template
-envsubst '${DOMAIN} ${ORIGIN_SERVER} ${CERTS_PATH}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/conf.d/default.conf
+envsubst '${DOMAIN} ${ORIGIN_SERVER} ${CERTS_PATH}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/nginx.conf
+
+# Create the default server block configuration file
+cat > /etc/nginx/conf.d/default.conf <<EOL
+server {
+    listen 80;
+    server_name cdn.${DOMAIN};
+
+    # Redirect HTTP to HTTPS
+    return 308 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name cdn.${DOMAIN};
+
+    ssl_certificate ${CERTS_PATH}/fullchain.pem;
+    ssl_certificate_key ${CERTS_PATH}/privkey.pem;
+
+    # Serve a simple message for HTTPS requests
+    location / {
+        return 200 '<html><body><h1>This domain is used for CDN purposes only.</h1></body></html>';
+        add_header Content-Type text/html;
+    }
+}
+EOL
 
 # Handle multiple applications
-app_env_vars=()
 for app_num in $(seq 1 20); do
     app_domain_var="APP${app_num}_DOMAIN"
     app_target_var="APP${app_num}_TARGET"
@@ -121,9 +145,6 @@ for app_num in $(seq 1 20); do
 
     if [ -n "$app_domain" ] && [ -n "$app_target" ] && [ -n "$app_port" ]; then
         echo "Configuring application #$app_num: $app_domain -> $app_target:$app_port"
-        app_env_vars+=("-e ${app_domain_var}=${app_domain}")
-        app_env_vars+=("-e ${app_target_var}=${app_target}")
-        app_env_vars+=("-e ${app_port_var}=${app_port}")
 
         cat >> /etc/nginx/conf.d/default.conf <<EOL
 server {
