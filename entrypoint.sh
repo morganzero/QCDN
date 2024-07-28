@@ -2,9 +2,6 @@
 
 # Function to update or create Cloudflare DNS record
 update_cloudflare_dns() {
-    local domain=$1
-    local target=$2
-
     local retries=5
     local initial_wait=60
 
@@ -13,7 +10,7 @@ update_cloudflare_dns() {
         sleep $((initial_wait * i))
 
         # Check if the DNS record already exists
-        response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=${domain}&type=A" \
+        response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=cdn.${DOMAIN}&type=A" \
         -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
         -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
         -H "Content-Type: application/json")
@@ -25,45 +22,45 @@ update_cloudflare_dns() {
 
         echo "Detected record ID: $record_id"
         echo "Current IP in DNS record: $current_ip"
-        echo "Origin server IP: $target"
+        echo "Origin server IP: $ORIGIN_SERVER"
 
         if [ "$record_id" != "null" ] && [ "$record_id" != "" ]; then
-            if [ "$current_ip" == "$target" ]; then
-                echo "DNS record already up-to-date for $domain"
+            if [ "$current_ip" == "$ORIGIN_SERVER" ]; then
+                echo "DNS record already up-to-date for cdn.${DOMAIN}"
                 return 0
             else
-                echo "Updating existing DNS record for $domain"
+                echo "Updating existing DNS record for cdn.${DOMAIN}"
                 response=$(curl -s -w "%{http_code}" -o response.json -X PUT "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records/${record_id}" \
                 -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
                 -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
                 -H "Content-Type: application/json" \
-                --data '{"type":"A","name":"'${domain}'","content":"'"${target}"'","ttl":120,"proxied":false}')
+                --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
             fi
         else
-            echo "Creating new DNS record for $domain"
+            echo "Creating new DNS record for cdn.${DOMAIN}"
             response=$(curl -s -w "%{http_code}" -o response.json -X POST "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records" \
             -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
             -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
             -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"'${domain}'","content":"'"${target}"'","ttl":120,"proxied":false}')
+            --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
         fi
 
         http_code=$(tail -n 1 <<< "$response")
 
         if [ "$http_code" -eq 200 ]; then
-            echo "DNS record for $domain updated successfully"
+            echo "DNS record updated successfully"
             return 0
         elif [ "$http_code" -eq 429 ]; then
             echo "Rate limited. Waiting for $((initial_wait * (2**i))) seconds before retrying..."
             sleep $((initial_wait * (2**i)))
         else
-            echo "Failed to update DNS record for $domain. HTTP status code: $http_code"
+            echo "Failed to update DNS record. HTTP status code: $http_code"
             cat response.json
             return 1
         fi
     done
 
-    echo "Failed to update DNS record for $domain after $retries attempts"
+    echo "Failed to update DNS record after $retries attempts"
     return 1
 }
 
@@ -73,27 +70,18 @@ if [ -z "$ORIGIN_SERVER" ]; then
     exit 1
 fi
 
-# Update Cloudflare DNS for the main QCDN server
-update_cloudflare_dns "cdn.${DOMAIN}" "$ORIGIN_SERVER" || exit 1
-
-# Iterate over each APPn_DOMAIN and APPn_TARGET
-for i in {1..20}; do
-    domain_var="APP${i}_DOMAIN"
-    target_var="APP${i}_TARGET"
-    target_port_var="APP${i}_TARGET_PORT"
-
-    domain="${!domain_var}"
-    target="${!target_var}"
-    target_port="${!target_port_var:-80}"
-
-    if [ -n "$domain" ] && [ -n "$target" ]; then
-        update_cloudflare_dns "$domain" "$target" || exit 1
-    fi
-done
+# Update Cloudflare DNS
+update_cloudflare_dns || exit 1
 
 # Ensure the certificates path is provided
 if [ -z "$CERTS_PATH" ]; then
     echo "Certificates path not provided"
+    exit 1
+fi
+
+# Ensure DOMAIN is set
+if [ -z "$DOMAIN" ]; then
+    echo "DOMAIN environment variable not set"
     exit 1
 fi
 
@@ -103,7 +91,7 @@ ls -l "$CERTS_PATH"
 
 # Wait for the certificates to be available
 for i in {1..10}; do
-    if [ -f "${CERTS_PATH}/fullchain.pem" ] && [ -f "${CERTS_PATH}/privkey.pem}" ]; then
+    if [ -f "${CERTS_PATH}/fullchain.pem" ] && [ -f "${CERTS_PATH}/privkey.pem" ]; then
         echo "Certificates found"
         break
     else
@@ -117,62 +105,58 @@ if [ ! -f "${CERTS_PATH}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/privkey.pem" 
     exit 1
 fi
 
-# Create a new Nginx configuration file
-echo "Creating Nginx configuration"
+# Generate Nginx configuration from template
+envsubst '${DOMAIN} ${ORIGIN_SERVER} ${CERTS_PATH}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/conf.d/default.conf
 
-cat <<EOF > /etc/nginx/nginx.conf
-events {}
-http {
-    include       mime.types;
-    default_type  application/octet-stream;
-    sendfile        on;
-    keepalive_timeout  65;
-EOF
+# Handle multiple applications
+app_env_vars=()
+for app_num in $(seq 1 20); do
+    app_domain_var="APP${app_num}_DOMAIN"
+    app_target_var="APP${app_num}_TARGET"
+    app_port_var="APP${app_num}_TARGET_PORT"
 
-# Generate Nginx configuration for each application
-for i in {1..20}; do
-  domain_var="APP${i}_DOMAIN"
-  target_var="APP${i}_TARGET"
-  target_port_var="APP${i}_TARGET_PORT"
+    app_domain="${!app_domain_var}"
+    app_target="${!app_target_var}"
+    app_port="${!app_port_var}"
 
-  domain="${!domain_var}"
-  target="${!target_var}"
-  target_port="${!target_port_var:-80}"
+    if [ -n "$app_domain" ] && [ -n "$app_target" ] && [ -n "$app_port" ]; then
+        echo "Configuring application #$app_num: $app_domain -> $app_target:$app_port"
+        app_env_vars+=("-e ${app_domain_var}=${app_domain}")
+        app_env_vars+=("-e ${app_target_var}=${app_target}")
+        app_env_vars+=("-e ${app_port_var}=${app_port}")
 
-  if [ -n "$domain" ] && [ -n "$target" ]; then
-    cat <<EOF >> /etc/nginx/nginx.conf
-    server {
-        listen 80;
-        server_name $domain;
+        cat >> /etc/nginx/conf.d/default.conf <<EOL
+server {
+    listen 80;
+    server_name ${app_domain};
 
-        # Redirect HTTP to HTTPS
-        return 308 https://\$host\$request_uri;
+    location / {
+        proxy_pass http://${app_target}:${app_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
+}
 
-    server {
-        listen 443 ssl;
-        server_name $domain;
+server {
+    listen 443 ssl;
+    server_name ${app_domain};
 
-        ssl_certificate ${CERTS_PATH}/fullchain.pem;
-        ssl_certificate_key ${CERTS_PATH}/privkey.pem;
+    ssl_certificate ${CERTS_PATH}/fullchain.pem;
+    ssl_certificate_key ${CERTS_PATH}/privkey.pem;
 
-        location / {
-            proxy_pass http://$target:$target_port;
-            proxy_set_header Host \$host;
-            proxy_set_header X-Real-IP \$remote_addr;
-            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto \$scheme;
-            proxy_buffering off;
-            proxy_set_header Connection "Keep-Alive";
-            proxy_http_version 1.1;
-        }
+    location / {
+        proxy_pass http://${app_target}:${app_port};
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto \$scheme;
     }
-EOF
-  fi
+}
+EOL
+    fi
 done
 
-# Close the http block
-echo "}" >> /etc/nginx/nginx.conf
-
 # Start Nginx
-exec "$@"
+exec nginx -g "daemon off;"
