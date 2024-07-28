@@ -64,24 +64,20 @@ update_cloudflare_dns() {
     return 1
 }
 
-# Ensure ORIGIN_SERVER is set
-if [ -z "$ORIGIN_SERVER" ]; then
-    echo "ORIGIN_SERVER environment variable not set"
+# Ensure DOMAIN is set
+if [ -z "$DOMAIN" ]; then
+    echo "DOMAIN environment variable not set"
     exit 1
 fi
 
-# Update Cloudflare DNS
-update_cloudflare_dns || exit 1
+# Update Cloudflare DNS if ORIGIN_SERVER is set
+if [ ! -z "$ORIGIN_SERVER" ]; then
+    update_cloudflare_dns || exit 1
+fi
 
 # Ensure the certificates path is provided
 if [ -z "$CERTS_PATH" ]; then
     echo "Certificates path not provided"
-    exit 1
-fi
-
-# Ensure DOMAIN is set
-if [ -z "$DOMAIN" ]; then
-    echo "DOMAIN environment variable not set"
     exit 1
 fi
 
@@ -105,8 +101,62 @@ if [ ! -f "${CERTS_PATH}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/privkey.pem" 
     exit 1
 fi
 
-# Generate Nginx configuration from template
-envsubst '${DOMAIN} ${ORIGIN_SERVER} ${CERTS_PATH}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/conf.d/default.conf
+# Create a new Nginx configuration file
+echo "Creating Nginx configuration"
+
+cat <<EOF > /etc/nginx/nginx.conf
+events {}
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+    sendfile        on;
+    keepalive_timeout  65;
+EOF
+
+# Generate Nginx configuration for each application
+for i in {1..20}; do
+  domain_var="APP${i}_DOMAIN"
+  target_var="APP${i}_TARGET"
+  target_port_var="APP${i}_TARGET_PORT"
+
+  domain="${!domain_var}"
+  target="${!target_var}"
+  target_port="${!target_port_var:-80}"
+
+  if [ -n "$domain" ] && [ -n "$target" ]; then
+    cat <<EOF >> /etc/nginx/nginx.conf
+    server {
+        listen 80;
+        server_name $domain;
+
+        # Redirect HTTP to HTTPS
+        return 308 https://\$host\$request_uri;
+    }
+
+    server {
+        listen 443 ssl;
+        server_name $domain;
+
+        ssl_certificate ${CERTS_PATH}/fullchain.pem;
+        ssl_certificate_key ${CERTS_PATH}/privkey.pem;
+
+        location / {
+            proxy_pass http://$target:$target_port;
+            proxy_set_header Host \$host;
+            proxy_set_header X-Real-IP \$remote_addr;
+            proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto \$scheme;
+            proxy_buffering off;
+            proxy_set_header Connection "Keep-Alive";
+            proxy_http_version 1.1;
+        }
+    }
+EOF
+  fi
+done
+
+# Close the http block
+echo "}" >> /etc/nginx/nginx.conf
 
 # Start Nginx
-nginx -g "daemon off;"
+exec "$@"
