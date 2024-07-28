@@ -3,7 +3,7 @@
 # Function to update or create Cloudflare DNS record
 update_cloudflare_dns() {
     local retries=5
-    local initial_wait=60
+    local initial_wait=30
 
     for ((i=0; i<retries; i++)); do
         # Initial wait to handle rate limits
