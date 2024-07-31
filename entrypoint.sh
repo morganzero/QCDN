@@ -73,25 +73,31 @@ fi
 # Update Cloudflare DNS
 update_cloudflare_dns || exit 1
 
-# Ensure the certificates path is provided
-if [ -z "$CERTS_PATH" ]; then
-    echo "Certificates path not provided"
-    exit 1
-fi
-
 # Ensure DOMAIN is set
 if [ -z "$DOMAIN" ]; then
     echo "DOMAIN environment variable not set"
     exit 1
 fi
 
+# Generate SSL certificate using Certbot
+if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ]; then
+    echo "Generating SSL certificates for $DOMAIN using Certbot"
+    certbot certonly --nginx -n --agree-tos --email "${CLOUDFLARE_EMAIL}" -d "$DOMAIN"
+    if [ $? -ne 0 ]; then
+        echo "Failed to generate SSL certificates"
+        exit 1
+    fi
+else
+    echo "SSL certificates for $DOMAIN already exist"
+fi
+
 # Debugging: print the CERTS_PATH content
 echo "Listing content of CERTS_PATH ($CERTS_PATH):"
-ls -l "$CERTS_PATH"
+ls -l "$CERTS_PATH/${DOMAIN}"
 
 # Wait for the certificates to be available
 for i in {1..10}; do
-    if [ -f "${CERTS_PATH}/fullchain.pem" ] && [ -f "${CERTS_PATH}/privkey.pem" ]; then
+    if [ -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] && [ -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
         echo "Certificates found"
         break
     else
@@ -100,7 +106,7 @@ for i in {1..10}; do
     fi
 done
 
-if [ ! -f "${CERTS_PATH}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/privkey.pem" ]; then
+if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
     echo "Certificates not found at ${CERTS_PATH} after waiting"
     exit 1
 fi
@@ -122,8 +128,8 @@ server {
     listen 443 ssl;
     server_name cdn.${DOMAIN};
 
-    ssl_certificate ${CERTS_PATH}/fullchain.pem;
-    ssl_certificate_key ${CERTS_PATH}/privkey.pem;
+    ssl_certificate ${CERTS_PATH}/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key ${CERTS_PATH}/${DOMAIN}/privkey.pem;
 
     # Serve a simple message for HTTPS requests
     location / {
@@ -164,8 +170,8 @@ server {
     listen 443 ssl;
     server_name ${app_domain};
 
-    ssl_certificate ${CERTS_PATH}/fullchain.pem;
-    ssl_certificate_key ${CERTS_PATH}/privkey.pem;
+    ssl_certificate ${CERTS_PATH}/${DOMAIN}/fullchain.pem;
+    ssl_certificate_key ${CERTS_PATH}/${DOMAIN}/privkey.pem;
 
     location / {
         proxy_pass http://${app_target}:${app_port};
