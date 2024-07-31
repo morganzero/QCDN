@@ -10,7 +10,7 @@ update_cloudflare_dns() {
         sleep $((initial_wait * i))
 
         # Check if the DNS record already exists
-        response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=cdn.${DOMAIN}&type=A" \
+        response=$(curl -s -X GET "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records?name=${DOMAIN}&type=A" \
         -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
         -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
         -H "Content-Type: application/json")
@@ -26,23 +26,23 @@ update_cloudflare_dns() {
 
         if [ "$record_id" != "null" ] && [ "$record_id" != "" ]; then
             if [ "$current_ip" == "$ORIGIN_SERVER" ]; then
-                echo "DNS record already up-to-date for cdn.${DOMAIN}"
+                echo "DNS record already up-to-date for ${DOMAIN}"
                 return 0
             else
-                echo "Updating existing DNS record for cdn.${DOMAIN}"
+                echo "Updating existing DNS record for ${DOMAIN}"
                 response=$(curl -s -w "%{http_code}" -o response.json -X PUT "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records/${record_id}" \
                 -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
                 -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
                 -H "Content-Type: application/json" \
-                --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
+                --data '{"type":"A","name":"'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
             fi
         else
-            echo "Creating new DNS record for cdn.${DOMAIN}"
+            echo "Creating new DNS record for ${DOMAIN}"
             response=$(curl -s -w "%{http_code}" -o response.json -X POST "${CLOUDFLARE_API_URL}/zones/${ZONE_ID}/dns_records" \
             -H "X-Auth-Email: ${CLOUDFLARE_EMAIL}" \
             -H "X-Auth-Key: ${CLOUDFLARE_API_KEY}" \
             -H "Content-Type: application/json" \
-            --data '{"type":"A","name":"cdn.'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
+            --data '{"type":"A","name":"'${DOMAIN}'","content":"'"${ORIGIN_SERVER}"'","ttl":120,"proxied":false}')
         fi
 
         http_code=$(tail -n 1 <<< "$response")
@@ -118,7 +118,7 @@ envsubst '${DOMAIN} ${ORIGIN_SERVER} ${CERTS_PATH}' < /etc/nginx/templates/nginx
 cat > /etc/nginx/conf.d/default.conf <<EOL
 server {
     listen 80;
-    server_name cdn.${DOMAIN};
+    server_name ${DOMAIN};
 
     # Redirect HTTP to HTTPS
     return 308 https://$host$request_uri;
@@ -126,7 +126,7 @@ server {
 
 server {
     listen 443 ssl;
-    server_name cdn.${DOMAIN};
+    server_name ${DOMAIN};
 
     ssl_certificate ${CERTS_PATH}/${DOMAIN}/fullchain.pem;
     ssl_certificate_key ${CERTS_PATH}/${DOMAIN}/privkey.pem;
