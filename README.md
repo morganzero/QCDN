@@ -109,6 +109,3 @@ docker run -d \
 1. **Run QCDN Container**: Use the provided `docker run` command with unique subdomains for each application.
 2. **Automatic DNS Management**: The `entrypoint.sh` script will manage the DNS records in Cloudflare.
 3. **Configure Plex**: Set the `Custom server access URLs` in Plex to `https://plex-cdn.your_domain.com`.
-
-By following these steps, each application will have its own unique subdomain, and the QCDN setup will route traffic through the CDN for optimal performance. The `entrypoint.sh` script will handle the DNS record creation and updates automatically in Cloudflare.
-
