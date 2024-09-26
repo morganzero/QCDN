@@ -1,6 +1,14 @@
 #!/bin/bash
 
-# Function to update or create Cloudflare DNS record
+# Set the subdomain if you want to add "cdn" as a subdomain
+SUBDOMAIN="cdn"
+
+# If SUBDOMAIN is set, append it to the DOMAIN
+if [ -n "$SUBDOMAIN" ]; then
+    DOMAIN="${SUBDOMAIN}.${DOMAIN}"
+fi
+
+# Function to update or create Cloudflare DNS record (now for subdomain "cdn.morganzero.com")
 update_cloudflare_dns() {
     local retries=5
     local initial_wait=60
@@ -79,36 +87,38 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-# Generate SSL certificate using Certbot
-if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ]; then
-    echo "Generating SSL certificates for $DOMAIN using Certbot"
-    certbot certonly --nginx -n --agree-tos --email "${CLOUDFLARE_EMAIL}" -d "$DOMAIN"
-    if [ $? -ne 0 ]; then
-        echo "Failed to generate SSL certificates"
-        exit 1
-    fi
-else
-    echo "SSL certificates for $DOMAIN already exist"
+if [ -z "$use_existing_certs" ]; then
+    use_existing_certs="no"  # default to no if not set
 fi
 
-# Debugging: print the CERTS_PATH content
-echo "Listing content of CERTS_PATH ($CERTS_PATH):"
-ls -l "$CERTS_PATH/${DOMAIN}"
-
-# Wait for the certificates to be available
-for i in {1..10}; do
-    if [ -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] && [ -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
-        echo "Certificates found"
-        break
+# Generate SSL certificate using Certbot if custom certs are not used
+if [ "$use_existing_certs" != "yes" ]; then
+    if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ]; then
+        echo "Generating SSL certificates for $DOMAIN using Certbot"
+        certbot certonly --nginx -n --agree-tos --email "${CLOUDFLARE_EMAIL}" -d "$DOMAIN"
+        if [ $? -ne 0 ]; then
+            echo "Failed to generate SSL certificates"
+            exit 1
+        fi
     else
-        echo "Waiting for certificates... Attempt $i"
-        sleep 5
+        echo "SSL certificates for $DOMAIN already exist"
     fi
-done
 
-if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
-    echo "Certificates not found at ${CERTS_PATH} after waiting"
-    exit 1
+    # Check if the certificates exist and are valid
+    for i in {1..10}; do
+        if [ -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] && [ -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
+            echo "Certificates found"
+            break
+        else
+            echo "Waiting for certificates... Attempt $i"
+            sleep 5
+        fi
+    done
+
+    if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
+        echo "Certificates not found at ${CERTS_PATH} after waiting"
+        exit 1
+    fi
 fi
 
 # Generate Nginx configuration from template
