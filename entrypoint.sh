@@ -1,5 +1,8 @@
 #!/bin/bash
 
+# Set up ACME challenge directory
+mkdir -p /var/www/certbot
+
 # Set the subdomain if you want to add "cdn" as a subdomain
 SUBDOMAIN="cdn"
 
@@ -95,29 +98,13 @@ fi
 if [ "$use_existing_certs" != "yes" ]; then
     if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ]; then
         echo "Generating SSL certificates for $DOMAIN using Certbot"
-        certbot certonly --nginx -n --agree-tos --email "${CLOUDFLARE_EMAIL}" -d "$DOMAIN"
+        certbot certonly --webroot -w /var/www/certbot -n --agree-tos --email "${CLOUDFLARE_EMAIL}" -d "$DOMAIN"
         if [ $? -ne 0 ]; then
             echo "Failed to generate SSL certificates"
             exit 1
         fi
     else
         echo "SSL certificates for $DOMAIN already exist"
-    fi
-
-    # Check if the certificates exist and are valid
-    for i in {1..10}; do
-        if [ -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] && [ -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
-            echo "Certificates found"
-            break
-        else
-            echo "Waiting for certificates... Attempt $i"
-            sleep 5
-        fi
-    done
-
-    if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ] || [ ! -f "${CERTS_PATH}/${DOMAIN}/privkey.pem" ]; then
-        echo "Certificates not found at ${CERTS_PATH} after waiting"
-        exit 1
     fi
 fi
 
