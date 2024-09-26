@@ -2,6 +2,8 @@
 
 # Set up ACME challenge directory
 mkdir -p /var/www/certbot
+chown -R www-data:www-data /var/www/certbot
+chmod 755 /var/www/certbot
 
 # Set the subdomain if you want to add "cdn" as a subdomain
 SUBDOMAIN="cdn"
