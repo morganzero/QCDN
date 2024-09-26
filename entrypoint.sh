@@ -1,10 +1,5 @@
 #!/bin/bash
 
-# Set up ACME challenge directory
-mkdir -p /var/www/certbot
-chown -R www-data:www-data /var/www/certbot
-chmod 755 /var/www/certbot
-
 # Set the subdomain if you want to add "cdn" as a subdomain
 SUBDOMAIN="cdn"
 
@@ -13,7 +8,7 @@ if [ -n "$SUBDOMAIN" ]; then
     DOMAIN="${SUBDOMAIN}.${DOMAIN}"
 fi
 
-# Function to update or create Cloudflare DNS record (now for subdomain "cdn.morganzero.com")
+# Function to update or create Cloudflare DNS record
 update_cloudflare_dns() {
     local retries=5
     local initial_wait=60
@@ -92,97 +87,8 @@ if [ -z "$DOMAIN" ]; then
     exit 1
 fi
 
-if [ -z "$use_existing_certs" ]; then
-    use_existing_certs="no"  # default to no if not set
-fi
-
-# Generate SSL certificate using Certbot if custom certs are not used
-if [ "$use_existing_certs" != "yes" ]; then
-    if [ ! -f "${CERTS_PATH}/${DOMAIN}/fullchain.pem" ]; then
-        echo "Generating SSL certificates for $DOMAIN using Certbot"
-        certbot certonly --webroot -w /var/www/certbot -n --agree-tos --email "${CLOUDFLARE_EMAIL}" -d "$DOMAIN"
-        if [ $? -ne 0 ]; then
-            echo "Failed to generate SSL certificates"
-            exit 1
-        fi
-    else
-        echo "SSL certificates for $DOMAIN already exist"
-    fi
-fi
-
 # Generate Nginx configuration from template
 envsubst '${DOMAIN} ${ORIGIN_SERVER} ${CERTS_PATH}' < /etc/nginx/templates/nginx.conf.template > /etc/nginx/nginx.conf
-
-# Create the default server block configuration file
-cat > /etc/nginx/conf.d/default.conf <<EOL
-server {
-    listen 80;
-    server_name ${DOMAIN};
-
-    # Redirect HTTP to HTTPS
-    return 308 https://$host$request_uri;
-}
-
-server {
-    listen 443 ssl;
-    server_name ${DOMAIN};
-
-    ssl_certificate ${CERTS_PATH}/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key ${CERTS_PATH}/${DOMAIN}/privkey.pem;
-
-    # Serve a simple message for HTTPS requests
-    location / {
-        return 200 '<html><body><h1>This domain is used for CDN purposes only.</h1></body></html>';
-        add_header Content-Type text/html;
-    }
-}
-EOL
-
-# Handle multiple applications
-for app_num in $(seq 1 20); do
-    app_domain_var="APP${app_num}_DOMAIN"
-    app_target_var="APP${app_num}_TARGET"
-    app_port_var="APP${app_num}_TARGET_PORT"
-
-    app_domain="${!app_domain_var}"
-    app_target="${!app_target_var}"
-    app_port="${!app_port_var}"
-
-    if [ -n "$app_domain" ] && [ -n "$app_target" ] && [ -n "$app_port" ]; then
-        echo "Configuring application #$app_num: $app_domain -> $app_target:$app_port"
-
-        cat >> /etc/nginx/conf.d/default.conf <<EOL
-server {
-    listen 80;
-    server_name ${app_domain};
-
-    location / {
-        proxy_pass http://${app_target}:${app_port};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-
-server {
-    listen 443 ssl;
-    server_name ${app_domain};
-
-    ssl_certificate ${CERTS_PATH}/${DOMAIN}/fullchain.pem;
-    ssl_certificate_key ${CERTS_PATH}/${DOMAIN}/privkey.pem;
-
-    location / {
-        proxy_pass http://${app_target}:${app_port};
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto \$scheme;
-    }
-}
-EOL
-    fi
-done
 
 # Start Nginx
 exec nginx -g "daemon off;"
